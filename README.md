@@ -23,6 +23,7 @@ Note that you can use the XTTSv2 checkpoint that you fine-tuned with your own da
 * Install Coqui/TTS from source
 ```
 git clone https://github.com/coqui-ai/TTS
+cd TTS
 pip install -e .[all,dev,notebooks]  # Select the relevant extras
 ```
 * Install requirements

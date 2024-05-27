@@ -15,6 +15,7 @@ from TTS.tts.layers.xtts.trainer.gpt_trainer import GPTArgs, GPTTrainerConfig, X
 from TTS.tts.models.xtts import load_audio
 
 from models.gpt_decode import GPTDecode
+from datasets.dataset_xtts import GPTXTTSDataset
 
 class GPTDecoder:
     def __init__(self, config, config_dataset):
@@ -25,9 +26,25 @@ class GPTDecoder:
             config_dataset
         )
         self.tokenizer = VoiceBpeTokenizer(config.model_args.tokenizer_file)
-        self.dataset = XTTSDataset(config, self.train_samples, self.tokenizer, config.audio.sample_rate, is_eval=False)
-        self.loader = DataLoader(self.dataset, collate_fn=self.dataset.collate_fn)
+        self.dataset = GPTXTTSDataset(config, self.train_samples, self.tokenizer, config.audio.sample_rate, is_eval=True)
+        self.loader = DataLoader(self.dataset, collate_fn=self.dataset.collate_fn, batch_size=self.config.batch_size)
         self.model = GPTDecode.init_from_config(config).to(self.device)
+    
+    def load_audio_16k(self, files):
+        audios = []
+        for file in files:
+            audio = load_audio(file, self.config.audio.sample_rate).to(self.device)
+            audio = audio[:, : self.config.audio.sample_rate * 30]
+
+            audio_16k = torchaudio.functional.resample(audio, self.config.audio.sample_rate, 16000).squeeze(0)
+            audios.append(audio_16k)
+
+        max_len   = max([_.size(0) for _ in audios])
+        audio_padded  = torch.zeros(len(audios), max_len)
+        for i in range(len(audios)):
+            audio_padded[i, : audios[i].size(0)] = audios[i]
+
+        return audio_padded
 
     def generate(self, output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -51,30 +68,32 @@ class GPTDecoder:
             wav_lengths = batch["wav_lengths"].to(self.device)
             cond_idxs = batch["cond_idxs"].to(self.device)
             cond_lens = batch["cond_lens"]
-            audio = load_audio(batch["filenames"][0], self.config.audio.sample_rate).to(self.device)
-            audio = audio[:, : self.config.audio.sample_rate * 30]
+            code_lengths = torch.ceil(wav_lengths / self.model.xtts.gpt.code_stride_len).long()
 
-            # compute latents for the decoder
-            audio_16k = torchaudio.functional.resample(audio, self.config.audio.sample_rate, 16000)
+            audio_16k = self.load_audio_16k(batch["filenames"]).to(self.device)
             speaker_embedding = self.model.xtts.hifigan_decoder.speaker_encoder.forward(audio_16k, l2_norm=True).unsqueeze(-1)
 
             latents = self.model.generate(
                 text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens
             )
 
-            wav = self.model.xtts.hifigan_decoder(latents, g=speaker_embedding).detach().cpu().squeeze()
-            file_name = batch["filenames"][0].split("/")[-1]
+            wav = []
+            for i in range(self.config.batch_size):
+                wav.append(self.model.xtts.hifigan_decoder(latents[i][: code_lengths[i]].unsqueeze(0), g=speaker_embedding[i]).detach().cpu().squeeze())
 
-            raw_audio = AudioSegment.from_file(batch["filenames"][0])
-            raw_audio = raw_audio.set_frame_rate(self.config.audio.output_sample_rate)
-            raw_audio.export(os.path.join(output_dir, "wavs", file_name), format="wav")
-            torchaudio.save(os.path.join(output_dir, "synthesis", file_name), torch.tensor(wav).unsqueeze(0), self.config.audio.output_sample_rate)
+            for i in range(self.config.batch_size):
+                file_name = batch["filenames"][i].split("/")[-1]
 
-            with open(os.path.join(output_dir, "gpt_latents", file_name.replace(".wav", ".npy")), "wb") as f:
-                np.save(f, latents.detach().squeeze(0).transpose(0, 1).cpu())
-            
-            with open(os.path.join(output_dir, "speaker_embeddings", file_name.replace(".wav", ".npy")), "wb") as f:
-                np.save(f, speaker_embedding.detach().squeeze(0).squeeze(1).cpu())
+                raw_audio = AudioSegment.from_file(batch["filenames"][i])
+                raw_audio = raw_audio.set_frame_rate(self.config.audio.output_sample_rate)
+                raw_audio.export(os.path.join(output_dir, "wavs", file_name), format="wav")
+                torchaudio.save(os.path.join(output_dir, "synthesis", file_name), torch.tensor(wav[i]).unsqueeze(0), self.config.audio.output_sample_rate)
+
+                with open(os.path.join(output_dir, "gpt_latents", file_name.replace(".wav", ".npy")), "wb") as f:
+                    np.save(f, latents[i][: code_lengths[i]].detach().squeeze(0).transpose(0, 1).cpu())
+                
+                with open(os.path.join(output_dir, "speaker_embeddings", file_name.replace(".wav", ".npy")), "wb") as f:
+                    np.save(f, speaker_embedding[i].detach().squeeze(0).squeeze(1).cpu())
 
 if __name__ == "__main__":
     audio_config = XttsAudioConfig(sample_rate=22050, dvae_sample_rate=22050, output_sample_rate=24000)
@@ -97,6 +116,7 @@ if __name__ == "__main__":
     config = GPTTrainerConfig(
         audio=audio_config,
         model_args=model_args,
+        batch_size = 4,
         num_loader_workers=8,
     )
 

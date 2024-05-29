@@ -20,9 +20,12 @@ class GPTHifiganTrainer:
 
         if config.pretrain_path is not None:
             state_dict = torch.load(config.pretrain_path)
-            hifigan_state_dict = {k.replace("hifigan_decoder.", ""): v for k, v in state_dict["model"].items() if "hifigan_decoder" in k and "speaker_encoder" not in k}
-            hifigan_state_dict = {k.replace("waveform_decoder.", ""): v for k, v in hifigan_state_dict.items()}
+            hifigan_state_dict = {k.replace("xtts.hifigan_decoder.waveform_decoder.", ""): v for k, v in state_dict["model"].items() if "hifigan_decoder" in k and "speaker_encoder" not in k}
             self.model.model_g.load_state_dict(hifigan_state_dict, strict=False)
+
+            if config.train_spk_encoder:
+                speaker_encoder_state_dict = {k.replace("xtts.hifigan_decoder.speaker_encoder.", ""): v for k, v in state_dict["model"].items() if "hifigan_decoder" in k and "speaker_encoder" in k}
+                self.model.speaker_encoder.load_state_dict(speaker_encoder_state_dict, strict=True)
 
     def train(self):
         # init the trainer and 🚀
@@ -58,6 +61,7 @@ if __name__ == "__main__":
         spk_path ="Ljspeech_latents/speaker_embeddings",
         output_path="outputs",
         pretrain_path="XTTS-v2/model.pth"
+        train_spk_encoder=False,
     )
 
     hifigan_trainer = GPTHifiganTrainer(config=config)

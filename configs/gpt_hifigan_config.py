@@ -140,4 +140,4 @@ class GPTHifiganConfig(BaseGANVocoderConfig):
     output_sample_rate: int = 24000
     gpt_latent_dim: int = 1024
     pretrain_path: str = None
-
+    train_spk_encoder: bool = False

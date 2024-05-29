@@ -4,7 +4,7 @@ This is an implementation for train hifigan part of XTTSv2 model using [**Coqui/
 
 In this repo, I'm using the Ljspeech dataset for experimentation, but you can easily swap out different datasets as long as they adhere to the same format as the Ljspeech dataset. Make sure your dataset includes both audio and transcripts.
 
-Another note is that currently, this repository only supports training the HiFi-GAN decoder while freezing the speaker encoder part. I will put this on the to-do list and complete it in the future. If you find this useful, please give me a star. Thank you!
+Another note is that currently, this repository now supports training the HiFi-GAN decoder and the speaker encoder part. If you find this useful, please give me a star. Thank you!
 
 ## Download dataset and XTTSv2 checkpoint:
 * Download Ljspeech dataset:

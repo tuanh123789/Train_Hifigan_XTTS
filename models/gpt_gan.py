@@ -14,8 +14,8 @@ from TTS.vocoder.layers.losses import DiscriminatorLoss, GeneratorLoss
 from TTS.vocoder.models.base_vocoder import BaseVocoder
 from TTS.vocoder.utils.generic_utils import plot_results
 
-from datasets.dataset_gan_only import GPTGANDataset
-from .hifigan_decoder import HifiganGenerator
+from datasets.dataset_gan import GPTGANDataset
+from .hifigan_decoder import HifiganGenerator, ResNetSpeakerEncoder
 from .hifigan_discriminator import HifiganDiscriminator
 
 
@@ -41,8 +41,24 @@ class GPTGAN(BaseVocoder):
         config.audio["sample_rate"] = config["output_sample_rate"]
         config.audio["num_mels"] = config["gpt_latent_dim"]
         self.config = config
+        speaker_encoder_audio_config={
+            "fft_size": 512,
+            "win_length": 400,
+            "hop_length": 160,
+            "sample_rate": 16000,
+            "preemphasis": 0.97,
+            "num_mels": 64,
+        },
         self.model_g = HifiganGenerator(in_channels=config.audio["num_mels"], out_channels=1, **config.generator_model_params)
         self.model_d = HifiganDiscriminator()
+        if config.train_spk_encoder:
+            self.speaker_encoder = ResNetSpeakerEncoder(
+                input_dim=64,
+                proj_dim=512,
+                log_input=True,
+                use_torch_spec=True,
+                audio_config=speaker_encoder_audio_config[0],
+            )
         self.train_disc = False  # if False, train only the generator.
         self.y_hat_g = None  # the last generator prediction to be passed onto the discriminator
         self.ap = ap
@@ -88,7 +104,10 @@ class GPTGAN(BaseVocoder):
 
         x = batch["input"]
         y = batch["waveform"]
-        z = batch["speaker_embedding"]
+        if self.config.train_spk_encoder:
+            z = self.speaker_encoder(batch["wav"])
+        else:
+            z = batch["speaker_embedding"]
 
         if optimizer_idx not in [0, 1]:
             raise ValueError(" [!] Unexpected `optimizer_idx`.")
@@ -307,12 +326,14 @@ class GPTGAN(BaseVocoder):
         Returns:
             Dict: formatted model inputs.
         """
-        if isinstance(batch[0], list):
-            x_G, y_G = batch[0]
-            x_D, y_D = batch[1]
-            return {"input": x_G, "waveform": y_G, "input_disc": x_D, "waveform_disc": y_D}
-        x, y, z = batch
-        return {"input": x, "waveform": y, "speaker_embedding": z}
+        if isinstance(batch, dict):
+            x = batch["mel"]
+            y = batch["audio"]
+            z = batch["wav"]
+            return {"input": x, "waveform": y, "wav": z}
+        else:
+            x, y, z = batch
+            return {"input": x, "waveform": y, "speaker_embedding": z}
 
     def get_data_loader(  # pylint: disable=no-self-use, unused-argument
         self,
@@ -351,18 +372,31 @@ class GPTGAN(BaseVocoder):
             use_noise_augment=config.use_noise_augment,
             use_cache=config.use_cache,
             verbose=verbose,
+            train_spk_encoder=config.train_spk_encoder,
         )
         dataset.shuffle_mapping()
         sampler = DistributedSampler(dataset, shuffle=True) if num_gpus > 1 else None
-        loader = DataLoader(
-            dataset,
-            batch_size=1 if is_eval else config.batch_size,
-            shuffle=num_gpus == 0,
-            drop_last=False,
-            sampler=sampler,
-            num_workers=config.num_eval_loader_workers if is_eval else config.num_loader_workers,
-            pin_memory=False,
-        )
+        if config.train_spk_encoder:
+            loader = DataLoader(
+                dataset,
+                batch_size=1 if is_eval else config.batch_size,
+                shuffle=num_gpus == 0,
+                drop_last=False,
+                sampler=sampler,
+                num_workers=config.num_eval_loader_workers if is_eval else config.num_loader_workers,
+                pin_memory=False,
+                collate_fn=dataset.collate_fn
+            )
+        else:
+            loader = DataLoader(
+                dataset,
+                batch_size=1 if is_eval else config.batch_size,
+                shuffle=num_gpus == 0,
+                drop_last=False,
+                sampler=sampler,
+                num_workers=config.num_eval_loader_workers if is_eval else config.num_loader_workers,
+                pin_memory=False,
+            )
         return loader
 
     def get_criterion(self):

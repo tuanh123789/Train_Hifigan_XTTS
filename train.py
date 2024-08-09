@@ -60,7 +60,7 @@ if __name__ == "__main__":
         mel_path="Ljspeech_latents/gpt_latents",
         spk_path ="Ljspeech_latents/speaker_embeddings",
         output_path="outputs",
-        pretrain_path="XTTS-v2/model.pth"
+        pretrain_path="XTTS-v2/model.pth",
         train_spk_encoder=False,
     )
 

@@ -48,6 +48,11 @@ python train.py
 ```
 Since there's no pre-trained discriminator available, and the only option is to load weights from the generator, the generated sounds might be a bit noisy in the early epochs. Please be patient and wait for the later epochs; the results will improve.
 
+For multiple GPU systems the follow will allow multiple gpu training:
+```
+CUDA_VISIBLE_DEVICES="0,1" python -m trainer.distribute --script train.py
+```
+
 ## Test
 
 You can generate audio with new hifigan decoder
